@@ -1,6 +1,5 @@
 const players = {};
 const ships = {};
-var shipCnt = 0;
 var colors = [0xfa3c3c, 0xff9029, 0xf0e441, 0x3beb6a, 0x40ddf5, 0xdd57ff];
 const shipSize = {width: 70, length: 85, port: 10};
 const PORT = {
@@ -14,8 +13,8 @@ const PORT = {
 const config = {
   type: Phaser.HEADLESS,
   parent: 'phaser-example',
-  width: 1000,
-  height: 1000,
+  width: 500,
+  height: 500,
   // width: window.innerWidth,
   // height: window.innerHeight,
   physics: {
@@ -51,10 +50,10 @@ function create() {
     // create a new player and add it to our players object
     players[socket.id] = {
       rotation: 0,
-      x: Math.floor(Math.random() * 700) + 50,
-      y: Math.floor(Math.random() * 500) + 50,
-      playerId: socket.id,
-      color: colors[shipCnt % 6],
+      x: (Object.keys(players).length + 1) * 100,
+      y: (Object.keys(players).length + 1) * 100,
+      playerId: socket.id, 
+      shipId: false,
       // Input
       input: {
         left: false,
@@ -64,13 +63,8 @@ function create() {
       // Ports
       selectedPort: 2,
       portNeighbor: false,
-      // ids of players locked to ports.
-      ports: {
-        0: false,
-        1: false,
-        2: false,
-        3: false,
-      },
+      // ids of players locked to ports. False if no player, undefined if port is disabled.
+      ports: [false, false, false, false],
       isCaptain: true,
     };
     // add player to server
@@ -160,11 +154,11 @@ function deg(rad) {
 
 CONNECT_RADIUS = 50;
 
-function dist(p1, p2) {
+function calcDist(p1, p2) {
   return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 }
 function isNear(p1, p2, d) {
-  return Math.abs(p1.x - p2.x) <= d && Math.abs(p1.y - p2.y) <= d && dist(p1, p2) <= d;
+  return Math.abs(p1.x - p2.x) <= d && Math.abs(p1.y - p2.y) <= d && calcDist(p1, p2) <= d;
 }
 
 function portLocation(ship, portNum) {
@@ -181,6 +175,7 @@ function portLocation(ship, portNum) {
 }
 
 function canConnect(p1, p2) {
+  if (p1.shipId && p2.shipId && p1.shipId === p2.shipId) return false;
   if (p1.selectedPort === 0 && p2.selectedPort !== 2) return false;
   if ((p1.selectedPort === 1 || p1.selectedPort === 3) && !(p2.selectedPort === 1 || p2.selectedPort === 3)) return false;
   if (p1.selectedPort === 2 && !(p2.selectedPort === 0 || p2.selectedPort === 2)) return false;
@@ -235,19 +230,26 @@ function rotatePort(playerInfo) {
   }
 }
 
-function movePassengers(playerInfo) {
-  Object.keys(playerInfo.ports).forEach(function (port1) {
-    // TODO: wtf?
-    port1 = parseInt(port1);
-    var neighbor = players[playerInfo.ports[port1]];
-    if (!neighbor) return;
-    var port2 = 0;
-    for (; port2 < 4; port2++) {
-      if (neighbor.ports[port2] === playerInfo.playerId) break;
+function movePassengers(startPlayer) {
+  // BFS starting from captain.
+  var queue = [startPlayer.playerId];
+  var visited = new Set();
+  while (queue.length > 0) {
+    var curr = queue.shift();
+    visited.add(curr);
+    var currPlayer = players[curr];
+    if (!currPlayer) continue;
+    for (var i = 0; i < 4; i++) {
+      if (visited.has(currPlayer.ports[i])) continue;
+      var neighbor = players[currPlayer.ports[i]];
+      if (!neighbor) continue;
+      queue.push(currPlayer.ports[i]);
+      for (var j = 0; j < 4; j++) {
+        if (neighbor.ports[j] === currPlayer.playerId) break;
+      }
+      follow(currPlayer, neighbor, i, j);
     }
-    follow(playerInfo, neighbor, port1, port2);
-    // TODO: bfs to move rest of ship
-  }, playerInfo);
+  }
 }
 
 function mod(n, m) {
@@ -279,21 +281,84 @@ function follow(p1, p2, port1, port2) {
   p2.y = p1.y + (p1Port.y - p1.y) + (p2.y - p2Port.y);
 }
 
+function transferToShip(playerInfo, newShip, newShipId) {
+  if (playerInfo.shipId) {
+    var oldShipId = playerInfo.shipId;
+    ships[oldShipId].forEach(function (playerId) {
+      newShip.push(playerId);
+      players[playerId].shipId = newShipId;
+    }, newShip);
+    delete ships[oldShipId];
+  } else {
+    playerInfo.shipId = newShipId;
+    newShip.push(playerInfo.playerId);
+  }
+}
+
 function lockShips(p1, p2) {
   p1.ports[p1.selectedPort] = p2.playerId;
   p2.ports[p2.selectedPort] = p1.playerId;
 
   // TODO: locking sequence
   
-  // TODO: determine captain of a ship.
-  p1.isCaptain = false;
-  p2.isCaptain = false;
-  var captain = p1.selectedPort === 0 ? p2 : p1;
+  var ship = [];
+  var shipId = Date.now();
+  transferToShip(p1, ship, shipId);
+  transferToShip(p2, ship, shipId);
+  ships[shipId] = ship;
+
+  var captain = players[getCaptain(ship)];
   captain.isCaptain = true;
   movePassengers(captain);
 
+  // TODO: create guns
+
+  // Lock front port if side locked and not already
+  if (p1.selectedPort === 1 || p1.selectedPort === 3) {
+    if (!p1.ports[0]) p1.ports[0] = undefined;
+    if (!p2.ports[0]) p2.ports[0] = undefined;
+  }
   rotatePort(p1);
   rotatePort(p2);
+}
+
+function getCaptain(ship) {
+  // Player with the most connections.
+  var maxPorts = -1;
+  var candidates = [];
+  for (var playerId of ship) {
+    var playerInfo = players[playerId];
+    playerInfo.isCaptain = false;
+    // Players attached at front port CAN NOT be captain.
+    if (playerInfo.ports[0]) continue;
+    var portCnt = playerInfo.ports.reduce((acc, neighborId) => acc + neighborId ? 1 : 0);
+    if (portCnt >= maxPorts) {
+      if (portCnt > maxPorts) candidates = [];
+      candidates.push(playerId);
+      maxPorts = portCnt;
+    }
+  }
+
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+
+  // Break tie by closest to the center.
+  var shipCenter = ship.reduce(
+    (acc, playerId) => [acc[0] + players[playerId].x, acc[1] + players[playerId].y], [0, 0]
+  );
+  shipCenter = {x: shipCenter[0] / ship.length, y: shipCenter[1] / ship.length};
+  var minDist = false;
+  var captain = undefined;
+  for (var playerId of candidates) {
+    dist = calcDist(shipCenter, players[playerId]);
+    if (!minDist || dist < minDist) {
+      minDist = dist;
+      captain = playerId;
+    }
+  }
+  
+  return captain;
 }
 
 function clearNeighbors(playerInfo) {

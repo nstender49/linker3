@@ -20,23 +20,19 @@ const PORT = {
 	LOCKED: "LOCKED",	
 };
 
-function handleResize() {
-  const height = window.innerHeight;
-  const width = window.innerWidth;
 
-  game.width = width;
-  game.height = height;
-  if (game.renderType === 1) {
-    game.renderer.resize(width, height);
-    Phaser.Canvas.setSmoothingEnabled(game.context, false);
-  }
+function handleResize() {
+  game.width = window.innerWidth;
+  game.height = window.innerHeight;
 }
 window.addEventListener("resize", handleResize, false);
+
 
 function preload() {
   this.load.image('ship', './assets/ship_v1.png');
   this.load.image('port', './assets/port.png');
   this.load.image('background', './assets/spaceBackground.jpg');
+  handleResize();
 }
 
 function create() {
@@ -71,7 +67,7 @@ function create() {
         if (playerInfo.playerId === player.playerId) {
           player.setRotation(playerInfo.rotation);
           player.setPosition(playerInfo.x, playerInfo.y);
-          setPortColors(player, playerInfo);
+          setColors(player, playerInfo);
           player.loc.setText(`${id.slice(0, 5)}: (${round(playerInfo.x, 2)}, ${round(playerInfo.y, 2)}) ${round(playerInfo.rotation, 2)}`);
         }
       });
@@ -120,7 +116,7 @@ function update() {
   if (change) this.socket.emit('playerInput', this.inputs);
 }
 
-function setPortColors(player, playerInfo) {
+function setColors(player, playerInfo) {
   Object.keys(playerInfo.ports).forEach(function (p) {
     if (playerInfo.ports[p]) {
       player.ports[p].setTint(getPortColor(PORT.LOCKED))
@@ -128,6 +124,11 @@ function setPortColors(player, playerInfo) {
       player.ports[p].clearTint();
     }
   }, player);
+  if (playerInfo.isCaptain) {
+    player.ship.setTint(0xffd700);
+  } else {
+    player.ship.clearTint();
+  }
   if (!isNaN(playerInfo.selectedPort)) player.ports[playerInfo.selectedPort].setTint(getPortColor(playerInfo.portNeighbor ? (playerInfo.locking ? PORT.LOCKING : PORT.ACTIVE) : PORT.OPEN));
 }
 
@@ -149,8 +150,8 @@ function round(num, digits) {
 }
 
 function displayPlayers(self, playerInfo, sprite) {
-  const container = self.add.container(playerInfo.x, playerInfo.y);
-  const player = self.add.sprite(0, 0, sprite).setOrigin(0.5, 0.5).setDisplaySize(shipSize.width, shipSize.length);
+  const player = self.add.container(playerInfo.x, playerInfo.y);
+  const ship = self.add.sprite(0, 0, sprite).setOrigin(0.5, 0.5).setDisplaySize(shipSize.width, shipSize.length);
   //const player = self.add.sprite(playerInfo.x, playerInfo.y, sprite).setOrigin(0.5, 0.5).setDisplaySize(shipSize.width, shipSize.length);
 
   // Add ports
@@ -162,18 +163,19 @@ function displayPlayers(self, playerInfo, sprite) {
   const playerLoc = self.add.text(shipSize.width / 2, shipSize.length / 2, `(${round(playerInfo.x, 2)}, ${round(playerInfo.y, 2)}) ${round(playerInfo.rotation, 2)}`);
 
   // Add all to container
-  container.add([player, ports[0], ports[1], ports[2], ports[3], playerLoc]);
-  container.ports = ports;
-  container.loc = playerLoc;
+  player.add([ship, ports[0], ports[1], ports[2], ports[3], playerLoc]);
+  player.ship = ship;
+  player.ports = ports;
+  player.loc = playerLoc;
 
   // Set port colors
-  setPortColors(container, playerInfo);
+  setColors(player, playerInfo);
 
   // Additional info
-  container.playerId = playerInfo.playerId;
+  player.playerId = playerInfo.playerId;
   // player.playerId = playerInfo.playerId
-  self.players.add(container);
-  if (container.playerId === self.socket.id) {
-    self.cameras.main.startFollow(container);
+  self.players.add(player);
+  if (player.playerId === self.socket.id) {
+    self.cameras.main.startFollow(player);
   }
 }
